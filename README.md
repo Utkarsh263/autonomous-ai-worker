@@ -1,162 +1,707 @@
-# Autonomous AI Task Worker (prototype)
+# Autonomous AI Task Worker
 
-A small prototype for the brief: *"Build a prototype of an AI worker that can take
-a natural language task and autonomously attempt to complete it using a computer."*
+A lightweight prototype of an autonomous AI worker that accepts a natural-language task, reasons about what needs to be done, executes a sequence of controlled tools, handles failures, requests human approval when necessary, verifies its actions, and produces an execution report.
 
-Example task it handles:
+The prototype focuses on a narrow but complete workflow:
 
-> "Find the latest invoice from Nimbus Traders, extract the amount and due date,
-> enter it into our internal system, and tell me once it is done."
+> "Find the latest invoice from Nimbus Traders, extract the amount and due date, enter it into our internal system, and tell me once it is done."
 
-This is a scoped, narrow prototype, not a production system -- per the brief's own
-guidance, "a narrow prototype that genuinely works is better than a broad system
-where most functionality is mocked." It uses a small local fake company environment
-instead of a real website or a real accounting tool, so it's safe to run and share
-(no real credentials, no third-party systems).
+Instead of interacting with real third-party systems, the project uses a local mock company environment. This keeps the system safe, reproducible, and easy to run.
 
-## What it actually does
+---
 
-Given a task sentence, the agent:
+##  What This Project Demonstrates
 
-1. Figures out which company the task is about.
-2. Looks through a folder of invoice files and finds the latest one for that company.
-3. Reads it and pulls out the invoice number, amount, and due date.
-4. **If that fails** (a field is missing or unparseable), it doesn't just crash --
-   it logs the failure, falls back to the next most recent *valid* invoice for the
-   same company, and **asks a human for approval** before using it instead of the one
-   actually asked for.
-5. Writes the result into a small JSON file that stands in for "our internal system,"
-   checking first that it isn't a duplicate.
-6. Reads the entry back out of that file to **verify** it's actually there (not just
-   assuming the write worked).
-7. Reports a plain-language summary of what it did, and why, if anything had to change.
+The worker follows a simple:
 
-Every step is logged with a timestamp, the action taken, and the result, so there's
-a full trace of what the agent actually did -- not just what it was supposed to do.
+**Plan → Act → Observe → Recover → Verify → Report**
 
-## Project layout
+workflow.
 
-```
+Given a natural-language task, it can:
+
+1. Identify the target company from the task.
+2. Search available invoices.
+3. Determine the latest invoice based on the issue date.
+4. Extract the invoice number, amount, and due date.
+5. Detect malformed or incomplete invoice data.
+6. Fall back to the next valid invoice when necessary.
+7. Request human approval before making a potentially unsafe substitution.
+8. Write the processed invoice into a simulated internal system.
+9. Verify that the write operation actually succeeded.
+10. Produce a human-readable execution summary.
+11. Maintain a detailed execution trace for debugging and auditing.
+
+The important part is that the worker does not simply assume that every action succeeds.
+
+---
+
+#  Architecture
+
+```text
+                    Natural Language Task
+                            │
+                            ▼
+                    ┌───────────────┐
+                    │   Reasoner    │
+                    │               │
+                    │ Identify      │
+                    │ target company│
+                    └───────┬───────┘
+                            │
+                            ▼
+                    ┌───────────────┐
+                    │    Worker     │
+                    │               │
+                    │ Plan          │
+                    │ Act           │
+                    │ Observe       │
+                    │ Recover       │
+                    │ Verify        │
+                    │ Report       │
+                    └───────┬───────┘
+                            │
+              ┌─────────────┼─────────────┐
+              │             │             │
+              ▼             ▼             ▼
+        ┌──────────┐  ┌───────────┐  ┌──────────┐
+        │  Read    │  │  Extract  │  │  Write   │
+        │ Invoices │  │  Fields   │  │  System  │
+        └──────────┘  └───────────┘  └────┬─────┘
+                                          │
+                                          ▼
+                                    ┌───────────┐
+                                    │  Verify   │
+                                    │  Result   │
+                                    └─────┬─────┘
+                                          │
+                                          ▼
+                                    Final Report
+````
+
+---
+
+#  Project Structure
+
+```text
 autonomous-ai-worker/
-├── run_demo.py                     # CLI entry point
+│
 ├── agent/
-│   ├── worker.py                   # the main plan -> act -> observe -> retry -> verify -> report loop
-│   ├── tools.py                    # the only things the agent is allowed to do (read/write/verify)
-│   ├── reasoner.py                 # turns the task sentence into a target (LLM optional, regex fallback)
-│   └── memory.py                   # tiny working-memory object for one run (facts + step trace)
+│   ├── __init__.py
+│   ├── memory.py
+│   ├── reasoner.py
+│   ├── tools.py
+│   └── worker.py
+│
 ├── mock_company_app/
-│   ├── invoices/                   # stand-in for "a shared drive full of invoices"
-│   │   ├── invoice_101.txt         # Nimbus Traders, older, valid
-│   │   ├── invoice_102.txt         # Nimbus Traders, newer, BROKEN on purpose (no amount, bad due date)
-│   │   └── invoice_201.txt         # Bluepeak Solutions, valid (used to test generalization)
-│   └── internal_system.json        # stand-in for "our internal system" -- the agent reads/writes this
-└── logs/run_log.jsonl               # created on first run; one JSON line per run, full trace
+│   ├── invoices/
+│   │   ├── invoice_101.txt
+│   │   ├── invoice_102.txt
+│   │   └── invoice_201.txt
+│   │
+│   └── internal_system.json
+│
+├── logs/
+│   └── run_log.jsonl
+│
+├── README.md
+├── requirements.txt
+└── run_demo.py
 ```
 
-## Setup & run
+### Core Components
 
-Requires Python 3.8+, no external dependencies for the core flow.
+| Component                               | Responsibility                                     |
+| --------------------------------------- | -------------------------------------------------- |
+| `run_demo.py`                           | CLI entry point                                    |
+| `agent/worker.py`                       | Main agent execution loop                          |
+| `agent/reasoner.py`                     | Converts natural language into a structured target |
+| `agent/tools.py`                        | Controlled actions available to the agent          |
+| `agent/memory.py`                       | Maintains state and execution history              |
+| `mock_company_app/invoices/`            | Simulated invoice repository                       |
+| `mock_company_app/internal_system.json` | Simulated accounting/internal system               |
+| `logs/run_log.jsonl`                    | Execution and audit history                        |
+
+---
+
+#  Execution Flow
+
+## 1. Task Understanding
+
+The worker receives a natural-language instruction:
+
+```text
+Find the latest invoice from Nimbus Traders,
+extract the amount and due date,
+enter it into our internal system.
+```
+
+The reasoning layer identifies:
+
+```text
+Target company: Nimbus Traders
+Requested action: Process latest invoice
+```
+
+The reasoning layer is intentionally isolated from the rest of the system.
+
+---
+
+## 2. Invoice Discovery
+
+The worker searches the invoice directory and identifies invoices belonging to the requested company.
+
+For example:
+
+```text
+invoice_101.txt → Nimbus Traders → valid
+invoice_102.txt → Nimbus Traders → invalid
+invoice_201.txt → Bluepeak Solutions → valid
+```
+
+The worker determines the latest invoice using the:
+
+```text
+Date Issued
+```
+
+field rather than relying on file modification time.
+
+---
+
+## 3. Failure Detection
+
+The newest Nimbus Traders invoice is intentionally malformed.
+
+For example:
+
+```text
+Invoice Number: INV-102
+Company: Nimbus Traders
+Amount: <missing>
+Due Date: invalid
+```
+
+Instead of crashing or silently continuing, the worker detects the invalid data.
+
+---
+
+## 4. Recovery + Human Approval
+
+The worker searches for the next most recent valid invoice.
+
+However, it does **not automatically substitute it**.
+
+Instead, it asks for human approval:
+
+```text
+The latest invoice could not be processed.
+
+A previous valid invoice was found:
+INV-101
+
+Would you like to use this invoice instead? [y/n]
+```
+
+This creates a human-in-the-loop safety boundary.
+
+---
+
+## 5. Write Operation
+
+After approval, the worker writes the extracted information into:
+
+```text
+mock_company_app/internal_system.json
+```
+
+Example:
+
+```json
+{
+  "invoice_number": "INV-101",
+  "company": "Nimbus Traders",
+  "amount": "INR 45,000",
+  "due_date": "2026-10-10"
+}
+```
+
+Before writing, the worker checks whether the invoice already exists.
+
+This makes the operation idempotent.
+
+---
+
+## 6. Verification
+
+The worker does not assume that a successful write means the operation actually succeeded.
+
+It reads the record back from the internal system and verifies:
+
+```text
+Invoice exists
+Company matches
+Amount matches
+Due date matches
+```
+
+Only after successful verification is the operation considered complete.
+
+---
+
+## 7. Final Report
+
+The worker produces a human-readable result such as:
+
+```text
+SUCCESS
+
+Invoice INV-101 for Nimbus Traders was entered successfully.
+
+Amount: INR 45,000
+Due date: 2026-10-10
+
+Note:
+The latest invoice could not be processed because required
+fields were invalid. A previous valid invoice was used after
+human approval.
+```
+
+---
+
+#  Agent Design
+
+The worker uses a lightweight state-machine approach rather than a generic agent framework.
+
+The execution loop is conceptually:
+
+```text
+Task
+  │
+  ▼
+Reason
+  │
+  ▼
+Choose Action
+  │
+  ▼
+Execute Tool
+  │
+  ▼
+Observe Result
+  │
+  ├── Success ───────────────┐
+  │                          │
+  ├── Recoverable Failure ───┤
+  │                          │
+  ├── Approval Required ─────┤
+  │                          │
+  └── Fatal Failure ──► Stop │
+                             ▼
+                          Verify
+                             │
+                             ▼
+                           Report
+```
+
+This approach keeps the behavior explicit and easy to debug.
+
+---
+
+#  Controlled Tool Interface
+
+The agent does not receive unrestricted shell or filesystem access.
+
+Instead, it can only use a small set of predefined operations exposed through `tools.py`.
+
+Typical operations include:
+
+```text
+list_invoices()
+read_invoice()
+extract_fields()
+write_entry()
+verify_entry()
+```
+
+This provides a clear boundary between:
+
+**Reasoning**
+
+and
+
+**Actions the agent is actually allowed to perform.**
+
+This is especially useful when extending the prototype toward real-world agent systems.
+
+---
+
+#  Human-in-the-Loop Safety
+
+Human approval is required when the worker wants to deviate from the original request.
+
+Example:
+
+```text
+Requested:
+Latest invoice
+
+Found:
+Latest invoice → invalid
+
+Fallback:
+Previous invoice → valid
+
+Decision:
+Ask human before substitution
+```
+
+This prevents the worker from silently making a potentially incorrect business decision.
+
+---
+
+#  Execution Logging
+
+Every run produces a JSON Lines (`JSONL`) execution trace.
+
+Example:
+
+```json
+{
+  "success": true,
+  "summary": "Invoice INV-101 processed successfully."
+}
+```
+
+The execution trace makes it possible to inspect:
+
+* What the worker attempted
+* Which tools were called
+* What each tool returned
+* Where failures occurred
+* Whether recovery was triggered
+* Whether human approval was required
+* Whether the final result was verified
+
+This provides basic observability and auditability.
+
+---
+
+#  Getting Started
+
+## Requirements
+
+* Python 3.8+
+* No external dependencies required for the core workflow
+
+Clone the repository:
 
 ```bash
+git clone https://github.com/<your-username>/autonomous-ai-worker.git
 cd autonomous-ai-worker
-
-# plain run, uses the default example task, asks for approval in the terminal
-python3 run_demo.py
-
-# your own task
-python3 run_demo.py "Find the latest invoice from Bluepeak Solutions and enter it into our internal system."
-
-# skip the interactive approval prompt (useful for a quick unattended demo)
-python3 run_demo.py --auto-approve "Find the latest invoice from Nimbus Traders, extract the amount and due date, enter it into our internal system, and tell me once it is done."
 ```
 
-Optional: set `ANTHROPIC_API_KEY` in your environment and `pip install anthropic`
-to let the task-parsing step use Claude instead of the built-in regex fallback.
-Nothing else changes -- this is a drop-in swap, not a different code path for the
-rest of the agent.
+Run the default demo:
 
-Try the Nimbus Traders task first -- it's the one that exercises the failure/retry/
-approval logic, since `invoice_102.txt` (the newest Nimbus invoice) is deliberately
-missing its amount. The Bluepeak task shows the clean/generalization path on a
-different company with no hand-written special-casing.
+```bash
+python run_demo.py
+```
 
-## Architecture, in one paragraph
+---
 
-`run_demo.py` just parses CLI args and prints the result. `worker.py` is the actual
-loop: it calls `reasoner.parse_task()` once to figure out the target company, then
-repeatedly calls into `tools.py` (list invoices, read, extract, write, verify) and
-makes a decision after each call based on what came back -- continue, retry, fall
-back to an older invoice, ask for human approval, or stop and explain why. `memory.py`
-is just a dict + a list that lives for one run, holding facts the agent has learned
-(e.g. "the invoice I ended up using") and the full step trace used for the final
-report and the log file.
+#  Running Custom Tasks
 
-## Key design decisions
+You can provide your own task:
 
-- **Tools are a small, closed set, not "give the model a shell."** The agent can
-  only do what `tools.py` exposes (list/read/extract/write/verify). This is an
-  intentional scope limit, not a corner cut -- it makes behavior predictable and
-  reviewable, and matches "you do not need to support every website or workflow."
-- **Reasoning is a thin, swappable layer, not the whole system.** `reasoner.py` only
-  does one job (figure out which company the task means). If `ANTHROPIC_API_KEY`
-  is set it asks Claude; otherwise it uses a regex that handles the same sentence
-  shapes the brief itself uses as examples. Both return the same shape, so `worker.py`
-  doesn't know or care which one ran. This keeps the demo runnable with zero secrets
-  while leaving an obvious place to plug in real LLM reasoning for messier tasks.
-- **The agent is written to expect failure, not to assume success.** Every tool call
-  returns `{"ok": ..., ...}` and the loop checks it -- a write isn't trusted until a
-  separate `verify_entry()` read confirms it, and a missing field doesn't crash the
-  script, it triggers the fallback/approval logic.
-- **Human approval is a real pause, not a log line.** When the agent would have to
-  substitute an older invoice for the one actually requested, it stops and asks
-  (via a terminal prompt in this prototype) rather than silently making that call
-  on its own.
-- **A plain state machine instead of an agent framework.** At this scope, explicit
-  `if/while` logic in `worker.py` is easier to read, debug, and explain than wiring
-  up a generic executor would be -- there just isn't enough branching yet to need one.
+```bash
+python run_demo.py "Find the latest invoice from Bluepeak Solutions and enter it into our internal system."
+```
 
-## Known limitations
+For an unattended demo:
 
-- Task understanding is narrow: it currently extracts *one* thing (the target company)
-  from the sentence. It doesn't yet parse arbitrary multi-step instructions or handle
-  tasks that don't fit the "find an invoice and log it" shape.
-- Invoice parsing is regex/label-based, tuned to the fixed `Label: value` format used
-  here. A real invoice (PDF, scanned, inconsistent layout) would need a different
-  extraction step (e.g. an LLM call or OCR), which the brief explicitly says is fine
-  to mock/limit for a prototype.
-- The "internal system" is a single JSON file with no concurrency handling -- fine
-  for a single-agent demo, not for multiple agents writing at once.
-- Human approval is a blocking terminal prompt. A real system would probably surface
-  this as a notification/ticket the person can answer asynchronously.
-- No persistent memory across separate runs -- each run starts fresh. Only within a
-  single run does the agent carry state between steps.
+```bash
+python run_demo.py --auto-approve "Find the latest invoice from Nimbus Traders, extract the amount and due date, enter it into our internal system, and tell me once it is done."
+```
 
-## What I'd build next with more time
+---
 
-- A second, genuinely different tool (e.g. a tiny simulated web form via a headless
-  browser) to test generalization across *kinds* of tools, not just across inputs
-  to the same tool.
-- Replace the regex extractor with an LLM-based one behind the same `extract_fields()`
-  interface, so messier/unstructured invoices work without changing `worker.py`.
-- A lightweight eval harness: a set of task + expected-outcome pairs run automatically
-  against the agent to catch regressions, instead of manually re-running scenarios.
-- Persist memory (e.g. "I've already processed invoice X") across runs, not just
-  within one, so re-running the same task repeatedly is cheap and safe by default
-  rather than relying on the internal-system idempotency check alone.
+#  Demo Scenarios
 
-## Assumptions made
+## Scenario 1 — Successful Execution
 
-- "Latest invoice" means most recent `Date Issued`, not file modification time.
-- A task always names the company close to literally (e.g. "from Nimbus Traders"),
-  matched case-insensitively against the `Company:` field in the invoice.
-- "Enter it into our internal system" means append a record if one doesn't already
-  exist for that invoice number; re-running an already-completed task is treated as
-  success, not an error.
+```text
+Bluepeak Solutions
+        ↓
+Latest valid invoice
+        ↓
+Extract fields
+        ↓
+Write to internal system
+        ↓
+Verify
+        ↓
+SUCCESS
+```
 
-## Models / APIs / frameworks used
+This demonstrates the normal execution path.
 
-- Python 3 standard library only for the core agent loop, tools, and mock environment.
-- Optional: the `anthropic` Python SDK + `claude-sonnet-5`, used only in
-  `reasoner.py` for parsing the task sentence, and only if `ANTHROPIC_API_KEY` is set.
-  No other external services, frameworks, or pre-built agent libraries are used --
-  this was built as plain, explicit code on purpose, to keep it fully inspectable.
+---
+
+## Scenario 2 — Failure + Recovery
+
+```text
+Nimbus Traders
+        ↓
+Latest invoice
+        ↓
+Invalid data
+        ↓
+Find previous valid invoice
+        ↓
+Human approval
+        ↓
+Write
+        ↓
+Verify
+        ↓
+SUCCESS
+```
+
+This demonstrates failure handling and human-in-the-loop decision making.
+
+---
+
+## Scenario 3 — Duplicate Request
+
+If the same invoice has already been processed:
+
+```text
+Invoice already exists
+        ↓
+No duplicate write
+        ↓
+Verify existing record
+        ↓
+SUCCESS
+```
+
+This demonstrates idempotent behavior.
+
+---
+
+#  Safety & Scope
+
+This prototype intentionally operates inside a local mock environment.
+
+It does **not**:
+
+* Access real accounting systems
+* Use real customer credentials
+* Modify third-party websites
+* Execute arbitrary shell commands
+* Access unrestricted files
+* Perform financial transactions
+* Make irreversible external changes
+
+The restricted environment makes the behavior deterministic and safe to experiment with.
+
+---
+
+#  Optional LLM Reasoning
+
+The core system works without an LLM.
+
+By default, `reasoner.py` uses a lightweight parsing strategy.
+
+An LLM can optionally be introduced as the reasoning layer while keeping the rest of the architecture unchanged.
+
+Conceptually:
+
+```text
+Natural Language
+       │
+       ▼
+┌───────────────────┐
+│ Reasoning Layer   │
+│                   │
+│ Regex / LLM       │
+└─────────┬─────────┘
+          │
+          ▼
+Structured Task
+          │
+          ▼
+       Worker
+```
+
+This separation means the reasoning implementation can evolve without rewriting the worker or tool layer.
+
+---
+
+#  Current Limitations
+
+This is intentionally a prototype and has several limitations.
+
+### Task Understanding
+
+The current reasoner primarily identifies the target company.
+
+It does not yet support arbitrary multi-step natural-language workflows.
+
+### Invoice Extraction
+
+Invoice parsing currently relies on predictable text labels.
+
+Real-world invoices may require:
+
+* OCR
+* PDF parsing
+* Vision models
+* LLM-based extraction
+* Schema validation
+
+### Internal System
+
+The internal system is represented by a JSON file.
+
+It does not provide:
+
+* Concurrent writes
+* Authentication
+* Transactions
+* Access control
+* Distributed state
+
+### Human Approval
+
+Approval currently happens through the terminal.
+
+A production implementation could use:
+
+* Web UI
+* Slack
+* Email
+* Approval dashboard
+* Task queue
+
+### Memory
+
+Working memory currently exists only during a single execution.
+
+Persistent memory across runs is not implemented yet.
+
+---
+
+# 🔮 Future Improvements
+
+Potential next steps include:
+
+### 1. Real Tool Integration
+
+Add a second tool type such as a simulated web form or browser-based workflow.
+
+### 2. LLM-Based Extraction
+
+Replace regex-based invoice extraction with an LLM/OCR pipeline while keeping the same tool interface.
+
+### 3. Persistent Agent Memory
+
+Store information such as:
+
+```text
+Previously processed:
+INV-101
+INV-201
+```
+
+to reduce repeated work across executions.
+
+### 4. Evaluation Framework
+
+Create automated test cases:
+
+```text
+Task → Expected Outcome
+```
+
+and run them automatically to measure:
+
+* Task success rate
+* Recovery success rate
+* Tool errors
+* Verification failures
+* Human approval frequency
+
+### 5. Production-Ready Internal System
+
+Replace the JSON mock system with an API/database layer supporting:
+
+* Authentication
+* Transactions
+* Concurrency
+* Audit logs
+* Role-based access control
+
+---
+
+#  Design Philosophy
+
+The project follows a few core principles:
+
+### Explicit over magical
+
+The worker uses a simple state machine instead of hiding execution inside a large agent framework.
+
+### Tools over unrestricted access
+
+The agent gets a small set of explicitly defined capabilities rather than unrestricted computer access.
+
+### Failure-aware execution
+
+Tool calls are treated as potentially unreliable.
+
+### Verify instead of assume
+
+Important actions are verified independently after execution.
+
+### Human approval for ambiguity
+
+When the system needs to make a decision outside the original request, it asks a human instead of silently guessing.
+
+### Replaceable reasoning
+
+The reasoning layer can be replaced without rewriting the execution engine.
+
+---
+
+#  Key Takeaway
+
+This project demonstrates a small but complete autonomous-worker architecture:
+
+```text
+Natural Language Task
+        ↓
+    Reasoning
+        ↓
+    Planning
+        ↓
+  Tool Execution
+        ↓
+    Observation
+        ↓
+ Failure Recovery
+        ↓
+ Human Approval
+        ↓
+     Action
+        ↓
+   Verification
+        ↓
+      Report
+```
+
+The goal is not to build a general-purpose AI agent.
+
+The goal is to demonstrate how an AI worker can perform a **realistic, constrained workflow reliably**, while remaining observable, recoverable, and safe.
+
+---
