@@ -1,0 +1,4 @@
+# No hard dependencies -- the core agent loop runs on the Python standard library only.
+# anthropic is optional: only needed if you set ANTHROPIC_API_KEY to let the task-parsing
+# step use an LLM instead of its built-in regex fallback.
+anthropic>=0.40.0
